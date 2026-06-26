@@ -1,0 +1,9 @@
+[Unit]
+Description=Send fund digest at 14:30 on weekdays (trading day check inside job)
+
+[Timer]
+OnCalendar=Mon-Fri *-*-* 14:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,17 @@
+bloggers:
+  - id: lanjing
+    name: 蓝鲸跃财
+    wechat_name: 蓝鲸跃财
+    rss_url_env: RSS_LANJING
+  - id: tiantian
+    name: 天天的理财日记
+    wechat_name: 天天的理财日记
+    rss_url_env: RSS_TIANTIAN
+  - id: jiazhi
+    name: 价值跃迁-only
+    wechat_name: 价值跃迁-only
+    rss_url_env: RSS_JIAZHI
+  - id: yage
+    name: 鸭哥养基
+    wechat_name: 鸭哥养基
+    rss_url_env: RSS_YAGE

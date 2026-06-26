@@ -1,0 +1,23 @@
+services:
+  wewe-rss:
+    image: cooderl/wewe-rss-sqlite:latest
+    container_name: wewe-rss
+    ports:
+      - "4000:4000"
+    environment:
+      - DATABASE_TYPE=sqlite
+      # 管理后台/API 授权码，请改成强密码
+      - AUTH_CODE=wjy
+      # 生成 RSS 完整 URL 时使用；本地开发用 localhost，上云改为域名或公网 IP
+      - SERVER_ORIGIN_URL=http://localhost:4000
+      # 推荐开启全文，便于 LLM 解析正文
+      - FEED_MODE=fulltext
+      # 定时更新订阅源（默认每天 5:35 和 17:35）
+      - CRON_EXPRESSION=35 9,14 * * *
+      - MAX_REQUEST_PER_MINUTE=60
+    volumes:
+      - wewe-rss-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  wewe-rss-data:

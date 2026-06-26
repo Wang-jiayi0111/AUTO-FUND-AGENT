@@ -1,0 +1,13 @@
+[Unit]
+Description=Auto Fund Agent Daily Digest
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/AUTO-FUND-AGENT
+EnvironmentFile=/opt/AUTO-FUND-AGENT/.env
+ExecStart=/opt/AUTO-FUND-AGENT/.venv/bin/python -m src.jobs.digest
+User=auto-fund
+
+[Install]
+WantedBy=multi-user.target

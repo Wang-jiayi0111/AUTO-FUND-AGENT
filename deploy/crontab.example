@@ -1,0 +1,2 @@
+# Weekday 14:20: poll RSS then send digest (trading day check inside digest)
+20 14 * * 1-5 cd /opt/AUTO-FUND-AGENT && /opt/AUTO-FUND-AGENT/.venv/bin/python -m src.jobs.poll >> /var/log/auto-fund-daily.log 2>&1 && /opt/AUTO-FUND-AGENT/.venv/bin/python -m src.jobs.digest >> /var/log/auto-fund-daily.log 2>&1

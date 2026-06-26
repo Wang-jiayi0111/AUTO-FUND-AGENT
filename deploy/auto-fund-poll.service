@@ -1,0 +1,13 @@
+[Unit]
+Description=Auto Fund Agent RSS Poll
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/AUTO-FUND-AGENT
+EnvironmentFile=/opt/AUTO-FUND-AGENT/.env
+ExecStart=/opt/AUTO-FUND-AGENT/.venv/bin/python -m src.jobs.poll
+User=auto-fund
+
+[Install]
+WantedBy=multi-user.target

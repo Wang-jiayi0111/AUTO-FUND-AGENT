@@ -1,0 +1,10 @@
+[Unit]
+Description=Poll fund blogger RSS every 30 minutes (legacy; prefer auto-fund-daily.timer)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
