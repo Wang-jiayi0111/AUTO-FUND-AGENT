@@ -6,6 +6,7 @@ from src.parse.llm_extractor import filter_trade_image_urls
 from src.parse.fund_resolver import FundResolver
 from src.parse.pipeline import (
     ParsePipeline,
+    _append_risk_alerts_to_merged,
     _drop_sector_alias_duplicates,
     _enrich_fund_ops_from_annotations,
     _enrich_fund_ops_from_text_analysis,
@@ -452,6 +453,35 @@ class MergeOperationsTests(unittest.TestCase):
         self.assertTrue(pipeline.should_save_sector_alert(ops[0]))
         self.assertFalse(pipeline.should_auto_store(ops[0]))
         self.assertFalse(pipeline.should_review(ops[0]))
+
+    def test_append_risk_alerts_when_no_trades(self):
+        merged = _append_risk_alerts_to_merged([], [
+            {
+                "sector": "有色",
+                "reason": "波动比较大，不建议贸然去抄底",
+                "amount_or_ratio": "20万",
+            },
+        ])
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["action"], "观望")
+        self.assertEqual(merged[0]["sector"], "有色")
+        self.assertTrue(merged[0]["_sector_alert"])
+
+    def test_append_risk_alerts_dedupes_existing_sector_alert(self):
+        merged = _append_risk_alerts_to_merged([
+            {
+                "action": "观望",
+                "sector": "有色",
+                "reason": "已有",
+                "_sector_alert": True,
+            },
+        ], [
+            {"sector": "有色", "reason": "重复"},
+            {"sector": "黄金", "reason": "金价高位谨慎"},
+        ])
+        self.assertEqual(len(merged), 2)
+        sectors = {op["sector"] for op in merged}
+        self.assertEqual(sectors, {"有色", "黄金"})
 
     def test_tiantian_626_analytical_text_image_first(self):
         """正文按板块分析、截图才是成交：过滤模糊 sector 行，并把 reason 挂到截图基金上。"""

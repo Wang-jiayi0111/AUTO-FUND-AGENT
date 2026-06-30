@@ -40,6 +40,8 @@ class Settings:
     llm_base_url: str
     llm_model: str
     llm_vision_model: str
+    llm_timeout_seconds: float
+    llm_max_retries: int
     vision_max_images: int
     poll_interval_minutes: int
     digest_hour: int
@@ -103,6 +105,8 @@ def get_settings() -> Settings:
         ),
         llm_model=os.getenv("LLM_MODEL", "qwen-plus"),
         llm_vision_model=os.getenv("LLM_VISION_MODEL", "qwen-vl-plus"),
+        llm_timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "180")),
+        llm_max_retries=int(os.getenv("LLM_MAX_RETRIES", "3")),
         vision_max_images=int(os.getenv("VISION_MAX_IMAGES", "15")),
         poll_interval_minutes=int(os.getenv("POLL_INTERVAL_MINUTES", "30")),
         digest_hour=int(os.getenv("DIGEST_HOUR", "14")),

@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+
+import httpx
 
 from src.config import get_settings
 from src.ingest.rss_poller import poll_rss
+from src.notify.messages import format_sector_risk_markdown
 from src.notify.wecom import WeComNotifier
 from src.parse.pipeline import ParsePipeline
 from src.store.feishu import FeishuStore
@@ -31,9 +33,20 @@ def process_blogger(
 
     for article in articles:
         logger.info("New article: %s | %s", blogger.name, article.title)
-        result = pipeline.parse_article(article)
+        try:
+            result = pipeline.parse_article(article)
+        except httpx.HTTPError as exc:
+            logger.error(
+                "Parse failed for %s | %s: %s",
+                blogger.name,
+                article.title,
+                exc,
+            )
+            continue
 
         if dry_run:
+            trade_ops = [op for op in result.operations if not pipeline.is_sector_alert(op)]
+            risk_ops = [op for op in result.operations if pipeline.is_sector_alert(op)]
             print(json.dumps(
                 {
                     "blogger": blogger.name,
@@ -44,10 +57,20 @@ def process_blogger(
                             "action": op.action,
                             "fund_code": op.fund_code,
                             "fund_name": op.fund_name,
+                            "sector": op.sector,
+                            "reason": op.reason,
                             "confidence": op.confidence,
                             "candidates": len(op.code_candidates),
                         }
-                        for op in result.operations
+                        for op in trade_ops
+                    ],
+                    "sector_risk_alerts": [
+                        {
+                            "sector": op.sector,
+                            "reason": op.reason,
+                            "amount_or_ratio": op.amount_or_ratio,
+                        }
+                        for op in risk_ops
                     ],
                 },
                 ensure_ascii=False,
@@ -68,17 +91,13 @@ def process_blogger(
             continue
 
         review_raw_saved = False
+        saved_sector_alerts: list = []
         for op in result.operations:
             if pipeline.should_auto_store(op):
                 store.save_operation(article, op)
             elif pipeline.should_save_sector_alert(op):
                 store.save_sector_alert(article, op)
-                notifier.send_markdown(
-                    f"**⚠️ 板块风险提示**\n博主：{blogger.name}\n"
-                    f"板块：{op.sector}\n"
-                    f"观点：{op.reason or op.amount_or_ratio}\n"
-                    f"[查看原文]({article.url})"
-                )
+                saved_sector_alerts.append(op)
             elif pipeline.should_review(op):
                 raw_payload = result.raw_json if not review_raw_saved else {}
                 review_id = store.save_pending_review(article, op, raw_payload)
@@ -92,6 +111,11 @@ def process_blogger(
                 notifier.send_text(
                     f"需人工查看：{blogger.name} | {article.title} | {article.url}"
                 )
+
+        if saved_sector_alerts:
+            notifier.send_markdown(
+                format_sector_risk_markdown(blogger.name, article, saved_sector_alerts)
+            )
 
         seen.mark_seen(blogger.id, article.guid)
         processed += 1

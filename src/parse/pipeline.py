@@ -392,6 +392,43 @@ def _enrich_fund_ops_from_text_analysis(
     return merged
 
 
+def _append_risk_alerts_to_merged(
+    merged: list[dict[str, Any]],
+    risk_alerts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Turn body-text risk alerts into 观望 sector rows for storage/notify."""
+    existing_sectors = {
+        _coerce_str(op.get("sector"))
+        for op in merged
+        if _coerce_str(op.get("sector"))
+        and (
+            op.get("_sector_alert")
+            or op.get("action") == "观望"
+        )
+    }
+    for alert in risk_alerts:
+        sector = _coerce_str(alert.get("sector"))
+        reason = _coerce_str(alert.get("reason"))
+        amount = _coerce_str(alert.get("amount_or_ratio"))
+        if not sector or sector in existing_sectors:
+            continue
+        if not reason and not amount:
+            continue
+        merged.append({
+            "action": "观望",
+            "fund_code": "",
+            "fund_name": "",
+            "sector": sector,
+            "amount_or_ratio": amount,
+            "reason": reason,
+            "confidence": float(alert.get("confidence", 0.85)),
+            "source": "text",
+            "_sector_alert": True,
+        })
+        existing_sectors.add(sector)
+    return merged
+
+
 def _sanitize_merged_ops(ops: list[dict[str, Any]]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for op in ops:
@@ -631,7 +668,6 @@ def _merge_operations(text_ops: list[dict[str, Any]], image_ops: list[dict[str, 
             text_op = dict(text_op)
             text_op.pop("_planting_hint", None)
             text_op.pop("_sector_only", None)
-            text_op.pop("_sector_alert", None)
             merged.append(text_op)
 
     return _drop_sector_alias_duplicates(_dedupe_merged(merged))
@@ -717,12 +753,11 @@ class ParsePipeline:
         text_data = self.llm.extract_from_text(
             article.title, article.content_text, image_data
         )
-        analysis_data = (
-            self.llm.extract_analysis_from_text(
-                article.title, article.content_text, image_data
-            )
-            if image_data.get("operations")
-            else {"annotations": []}
+        analysis_data = self.llm.extract_analysis_from_text(
+            article.title, article.content_text, image_data
+        )
+        risk_data = self.llm.extract_risk_alerts_from_text(
+            article.title, article.content_text, image_data
         )
         text_ops = _filter_analytical_text_operations(
             text_data.get("operations", []),
@@ -735,6 +770,9 @@ class ParsePipeline:
         merged = _enrich_fund_ops_from_text_analysis(
             merged, text_data.get("operations", [])
         )
+        merged = _append_risk_alerts_to_merged(
+            merged, risk_data.get("risk_alerts", [])
+        )
         operations = _drop_unresolved_sector_aliases([
             _to_parsed_operation(item, self.resolver, self.settings) for item in merged
         ])
@@ -742,6 +780,7 @@ class ParsePipeline:
             "text": text_data,
             "image": image_data,
             "analysis": analysis_data,
+            "risk": risk_data,
             "merged": _sanitize_merged_ops(merged),
         }
         return ParseResult(article=article, operations=operations, raw_json=raw_json)
