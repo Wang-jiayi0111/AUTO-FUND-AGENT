@@ -1,8 +1,8 @@
 [Unit]
-Description=Weekday 14:20 poll RSS then send digest (trading day check in digest)
+Description=Legacy single-step poll + digest timer (prefer poll 14:30 + digest 14:40)
 
 [Timer]
-OnCalendar=Mon-Fri *-*-* 14:20:00
+OnCalendar=Mon-Fri *-*-* 14:30:00
 Persistent=true
 
 [Install]

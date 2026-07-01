@@ -19,6 +19,10 @@ def _field_text(record: dict, key: str) -> str:
     return FeishuStore._field_text(record, key)
 
 
+def _field_url(record: dict, key: str) -> str:
+    return FeishuStore._field_url(record, key)
+
+
 def _match_focus(op: dict, focus_items: list[dict[str, str]], store: FeishuStore) -> bool:
     blogger = store.blogger_id_from_field(op, "blogger_id")
     code = _field_text(op, "fund_code")
@@ -45,6 +49,7 @@ def build_digest(store: FeishuStore, since: datetime) -> str:
     name_map = store.get_blogger_name_map()
     operations = store.get_operations_since(since)
     pending = store.get_pending_reviews()
+    articles = store.get_articles_since(since)
 
     sector_alerts: list[dict] = []
     focus_ops: list[dict] = []
@@ -82,7 +87,7 @@ def build_digest(store: FeishuStore, since: datetime) -> str:
                 lines.append(f"  观点：{reason}")
             elif amount:
                 lines.append(f"  提及：{amount}")
-            url = _field_text(op, "article_url")
+            url = _field_url(op, "article_url")
             if url:
                 lines.append(f"  原文：{url}")
         lines.append("")
@@ -103,7 +108,7 @@ def build_digest(store: FeishuStore, since: datetime) -> str:
             reason = _field_text(op, "reason")
             if reason:
                 lines.append(f"  理由：{reason}")
-            url = _field_text(op, "article_url")
+            url = _field_url(op, "article_url")
             if url:
                 lines.append(f"  原文：{url}")
         lines.append("")
@@ -136,6 +141,30 @@ def build_digest(store: FeishuStore, since: datetime) -> str:
             fund = _field_text(rec, "fund_name")
             link = store.record_link("pending_review", rec["record_id"])
             lines.append(f"- {fund}（置信度 {conf}）[打开飞书确认]({link})")
+
+    article_bloggers = {store.blogger_id_from_field(rec, "blogger_id") for rec in articles}
+    failed = [rec for rec in articles if _field_text(rec, "status") == "解析失败"]
+    parsed = [
+        rec for rec in articles
+        if _field_text(rec, "status") in {"已解析", "无操作", "待确认"}
+    ]
+    lines.extend([
+        "",
+        "---",
+        "**运行摘要**",
+        f"- 今日发现文章：{len(articles)} 篇",
+        f"- 成功处理文章：{len(parsed)} 篇",
+        f"- 自动/风险入库操作：{len(operations)} 条",
+        f"- 待确认：{len(pending)} 条",
+        f"- 失败：{len(failed)} 篇",
+    ])
+    missing = sorted(follow_ids - article_bloggers) if follow_ids else []
+    if missing:
+        names = [name_map.get(blogger_id, blogger_id) for blogger_id in missing]
+        lines.append(f"- 未发现当天文章：{'、'.join(names)}")
+    if failed:
+        titles = [_field_text(rec, "title") for rec in failed[:3]]
+        lines.append(f"- 失败文章：{'；'.join(titles)}")
 
     return "\n".join(lines)
 

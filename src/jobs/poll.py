@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -11,11 +14,45 @@ from src.ingest.rss_poller import poll_rss
 from src.notify.messages import format_sector_risk_markdown
 from src.notify.wecom import WeComNotifier
 from src.parse.pipeline import ParsePipeline
-from src.store.feishu import FeishuStore
+from src.store.feishu import (
+    ARTICLE_STATUS_FAILED,
+    ARTICLE_STATUS_NO_OPS,
+    ARTICLE_STATUS_PARSED,
+    ARTICLE_STATUS_REVIEW,
+    FINAL_ARTICLE_STATUSES,
+    FeishuStore,
+)
 from src.store.seen import SeenStore
 from src.utils.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+
+
+@dataclass
+class PollStats:
+    found: int = 0
+    skipped: int = 0
+    processed: int = 0
+    auto_saved: int = 0
+    pending: int = 0
+    failed: int = 0
+
+
+def _is_today_article(article) -> bool:
+    if article.published_at:
+        dt = article.published_at
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(SHANGHAI_TZ).date() == datetime.now(SHANGHAI_TZ).date()
+    return True
+
+
+def _article_should_skip(record: dict | None) -> bool:
+    if not record:
+        return False
+    status = FeishuStore._field_text(record, "status")
+    return status in FINAL_ARTICLE_STATUSES or status == ARTICLE_STATUS_FAILED
 
 
 def process_blogger(
@@ -26,22 +63,60 @@ def process_blogger(
     notifier: WeComNotifier,
     dry_run: bool,
     limit: int | None = None,
+    today_only: bool = True,
+    force_urls: set[str] | None = None,
+    only_urls: set[str] | None = None,
 ) -> int:
-    known = seen.seen_for_blogger(blogger.id)
+    known = seen.seen_for_blogger(blogger.id) if not store else set()
     articles = poll_rss(blogger, known, limit=limit)
-    processed = 0
+    stats = PollStats(found=len(articles))
+
+    if store:
+        try:
+            store.update_blogger_health(
+                blogger.id,
+                success=True,
+                article=articles[0] if articles else None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to update blogger health for %s: %s", blogger.id, exc)
 
     for article in articles:
+        if only_urls is not None and article.url not in only_urls:
+            continue
+        force = article.url in (force_urls or set())
+        if today_only and not force and not _is_today_article(article):
+            logger.info("Skip non-today article: %s | %s", blogger.name, article.title)
+            stats.skipped += 1
+            continue
+
+        article_record_id: str | None = None
+        if store:
+            existing = store.find_article(article.guid, article.url)
+            if not force and _article_should_skip(existing):
+                logger.info("Skip existing article: %s | %s", blogger.name, article.title)
+                stats.skipped += 1
+                continue
+            if existing:
+                article_record_id = existing["record_id"]
+            else:
+                article_record_id = store.create_article(article)
+
         logger.info("New article: %s | %s", blogger.name, article.title)
         try:
+            if store and article_record_id:
+                store.mark_article_parsing(article_record_id)
             result = pipeline.parse_article(article)
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, Exception) as exc:  # noqa: BLE001
             logger.error(
                 "Parse failed for %s | %s: %s",
                 blogger.name,
                 article.title,
                 exc,
             )
+            if store and article_record_id:
+                store.mark_article_failed(article_record_id, str(exc))
+            stats.failed += 1
             continue
 
         if dry_run:
@@ -77,31 +152,45 @@ def process_blogger(
                 indent=2,
             ))
             seen.mark_seen(blogger.id, article.guid)
-            processed += 1
+            stats.processed += 1
             continue
 
         if not store:
             logger.warning("Feishu not configured, skipping store")
             seen.mark_seen(blogger.id, article.guid)
+            stats.processed += 1
             continue
 
         if not result.operations:
             logger.info("No operations parsed for: %s", article.title)
+            if article_record_id:
+                store.mark_article_done(article_record_id, ARTICLE_STATUS_NO_OPS, 0, 0, result.raw_json)
             seen.mark_seen(blogger.id, article.guid)
+            stats.processed += 1
             continue
 
         review_raw_saved = False
         saved_sector_alerts: list = []
+        operation_count = 0
+        pending_count = 0
         for op in result.operations:
             if pipeline.should_auto_store(op):
-                store.save_operation(article, op)
+                store.save_operation(article, op, article_record_id=article_record_id)
+                operation_count += 1
             elif pipeline.should_save_sector_alert(op):
-                store.save_sector_alert(article, op)
+                store.save_sector_alert(article, op, article_record_id=article_record_id)
                 saved_sector_alerts.append(op)
+                operation_count += 1
             elif pipeline.should_review(op):
                 raw_payload = result.raw_json if not review_raw_saved else {}
-                review_id = store.save_pending_review(article, op, raw_payload)
+                review_id = store.save_pending_review(
+                    article,
+                    op,
+                    raw_payload,
+                    article_record_id=article_record_id,
+                )
                 review_raw_saved = True
+                pending_count += 1
                 link = store.record_link("pending_review", review_id)
                 notifier.send_markdown(
                     f"**待确认操作**\n博主：{blogger.name}\n基金：{op.fund_name}\n"
@@ -117,10 +206,32 @@ def process_blogger(
                 format_sector_risk_markdown(blogger.name, article, saved_sector_alerts)
             )
 
-        seen.mark_seen(blogger.id, article.guid)
-        processed += 1
+        if article_record_id:
+            status = ARTICLE_STATUS_REVIEW if pending_count else ARTICLE_STATUS_PARSED
+            store.mark_article_done(
+                article_record_id,
+                status,
+                operation_count,
+                pending_count,
+                result.raw_json,
+            )
 
-    return processed
+        seen.mark_seen(blogger.id, article.guid)
+        stats.processed += 1
+        stats.auto_saved += operation_count
+        stats.pending += pending_count
+
+    logger.info(
+        "Blogger stats %s: found=%s skipped=%s processed=%s saved=%s pending=%s failed=%s",
+        blogger.id,
+        stats.found,
+        stats.skipped,
+        stats.processed,
+        stats.auto_saved,
+        stats.pending,
+        stats.failed,
+    )
+    return stats.processed
 
 
 def main() -> None:
@@ -128,6 +239,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Parse without writing to Feishu")
     parser.add_argument("--limit", type=int, default=None, help="Max new articles per blogger")
     parser.add_argument("--blogger", type=str, default=None, help="Only process one blogger_id")
+    parser.add_argument("--include-old", action="store_true", help="Process non-today articles")
     parser.add_argument(
         "--log-file",
         type=str,
@@ -155,7 +267,14 @@ def main() -> None:
             logger.warning("Missing RSS URL for blogger %s", blogger.id)
             continue
         total += process_blogger(
-            blogger, pipeline, store, seen, notifier, args.dry_run, limit=args.limit
+            blogger,
+            pipeline,
+            store,
+            seen,
+            notifier,
+            args.dry_run,
+            limit=args.limit,
+            today_only=not args.include_old,
         )
 
     logger.info("Processed %s new article(s)", total)

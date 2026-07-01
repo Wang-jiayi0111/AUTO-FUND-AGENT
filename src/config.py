@@ -89,6 +89,7 @@ def get_settings() -> Settings:
         "follow_list": os.getenv("FEISHU_TABLE_FOLLOW_LIST", ""),
         "focus_list": os.getenv("FEISHU_TABLE_FOCUS_LIST", ""),
         "operations": os.getenv("FEISHU_TABLE_OPERATIONS", ""),
+        "articles": os.getenv("FEISHU_TABLE_ARTICLES", ""),
         "fund_mapping": os.getenv("FEISHU_TABLE_FUND_MAPPING", ""),
         "pending_review": os.getenv("FEISHU_TABLE_PENDING_REVIEW", ""),
     }

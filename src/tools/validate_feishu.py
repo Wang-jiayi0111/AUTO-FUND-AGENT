@@ -12,6 +12,7 @@ TABLES = [
     ("follow_list", "FollowList"),
     ("focus_list", "FocusList"),
     ("operations", "Operations"),
+    ("articles", "Articles"),
     ("fund_mapping", "FundMapping"),
     ("pending_review", "PendingReview"),
 ]
@@ -39,7 +40,7 @@ def main() -> None:
     if failed:
         sys.exit(1)
 
-    print("\nAll 6 Feishu tables validated.")
+    print("\nAll 7 Feishu tables validated.")
     print("\nRecord summary (first page, up to 100 rows):")
     for key, label in TABLES:
         try:

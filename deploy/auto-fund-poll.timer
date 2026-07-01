@@ -1,9 +1,9 @@
 [Unit]
-Description=Poll fund blogger RSS every 30 minutes (legacy; prefer auto-fund-daily.timer)
+Description=Poll fund blogger RSS at 14:30 and 14:35 on weekdays
 
 [Timer]
-OnBootSec=5min
-OnUnitActiveSec=30min
+OnCalendar=Mon-Fri *-*-* 14:30:00
+OnCalendar=Mon-Fri *-*-* 14:35:00
 Persistent=true
 
 [Install]

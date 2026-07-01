@@ -1,7 +1,7 @@
 # Windows 定时任务
 
-博主一般在 **14:00 左右**发文，因此**不需要**每 30 分钟轮询。  
-推荐：**每个工作日固定跑一次**——先拉 RSS 解析入库，再发企业微信汇总。
+博主一般在 **14:00 左右**发文，因此**不需要**高频轮询。  
+推荐：**每个工作日跑三次任务**——14:30 和 14:35 拉 RSS 解析入库，14:40 发企业微信汇总。
 
 ## 前置
 
@@ -27,42 +27,57 @@ deploy\run_daily.bat
 Get-Content logs\daily.log -Tail 30
 ```
 
-## 推荐：一个定时任务（Poll + Digest）
+## 推荐：两个定时任务
 
 | 脚本 | 作用 |
 |------|------|
-| **`deploy\run_daily.bat`** | 先 `poll` 拉取解析入库，再 `digest` 推送汇总 |
-| 日志 | `logs\daily.log` |
+| **`deploy\run_poll.bat`** | 14:30 和 14:35 拉取 RSS，最多处理每个博主 5 篇最新未读文章 |
+| **`deploy\run_digest.bat`** | 14:40 读取飞书并推送企业微信汇总 |
+| 日志 | `logs\poll.log` / `logs\digest.log` |
 
 ### 任务计划程序配置
 
+创建第一个任务：
+
 1. 打开「任务计划程序」→ 创建基本任务
-2. 名称：`AUTO-FUND daily`
-3. 触发器：**每周**，勾选 **周一至周五**，时间 **14:20**（博主约 14:00 发文，留约 20 分钟缓冲）
+2. 名称：`AUTO-FUND poll`
+3. 触发器：**每周**，勾选 **周一至周五**，时间 **14:30**
 4. 操作：启动程序
-   - 程序：`F:\AUTO-FUND-AGENT\deploy\run_daily.bat`
+   - 程序：`F:\AUTO-FUND-AGENT\deploy\run_poll.bat`
    - 起始于：`F:\AUTO-FUND-AGENT`
-5. 条件：取消「只有在使用交流电源时才启动」（笔记本）
-6. `digest.py` 内部会判断 **A 股交易日**，节假日自动跳过推送
+
+创建第二个任务：
+
+1. 名称：`AUTO-FUND poll retry`
+2. 触发器：**每周**，勾选 **周一至周五**，时间 **14:35**
+3. 操作：启动程序
+   - 程序：`F:\AUTO-FUND-AGENT\deploy\run_poll.bat`
+   - 起始于：`F:\AUTO-FUND-AGENT`
+
+创建第三个任务：
+
+1. 名称：`AUTO-FUND digest`
+2. 触发器：**每周**，勾选 **周一至周五**，时间 **14:40**
+3. 操作：启动程序
+   - 程序：`F:\AUTO-FUND-AGENT\deploy\run_digest.bat`
+   - 起始于：`F:\AUTO-FUND-AGENT`
+
+两个任务都建议在「条件」里取消「只有在使用交流电源时才启动」（笔记本）。`digest.py` 内部会判断 **A 股交易日**，节假日自动跳过推送。
 
 ### 流程说明
 
 ```
-14:20  run_daily.bat
-         ├─ poll   拉 4 个博主 RSS → LLM 解析 → 写飞书
+14:30  run_poll.bat
+         └─ poll   拉 4 个博主 RSS → 每个博主最多处理 5 篇最新未读文章 → LLM 解析 → 写飞书
+
+14:35  run_poll.bat
+         └─ poll   补抓第二次 RSS 刷新后出现的新文章；已处理文章不会重复入库
+
+14:40  run_digest.bat
          └─ digest 读飞书 24h 操作 + 待确认 → 企业微信群推送
 ```
 
-## 可选：拆成两个任务
-
-若希望 **14:30 整** 才推送（方案默认时间），可拆成：
-
-| 任务 | 时间 | 脚本 |
-|------|------|------|
-| 仅入库 | 周一至五 14:15 | `deploy\run_poll.bat` |
-| 仅推送 | 周一至五 14:30 | `deploy\run_digest.bat` |
-
-一般 **一个 `run_daily.bat` 即可**，不必高频 poll。
+`deploy\run_daily.bat` 仍保留给手动串联测试使用，但定时任务建议使用上面的两个脚本。
 
 ## 日志查看
 
@@ -77,4 +92,4 @@ Get-Content F:\AUTO-FUND-AGENT\logs\daily.log -Tail 30 -Encoding utf8
 
 ## 上云
 
-稳定后参考 [DEPLOY.md](DEPLOY.md)，使用 `deploy/auto-fund-daily.timer`（工作日 14:20，poll + digest 串联）。
+稳定后参考 [DEPLOY.md](DEPLOY.md)，使用 `deploy/auto-fund-poll.timer`（工作日 14:30/14:35）和 `deploy/auto-fund-digest.timer`（工作日 14:40）。

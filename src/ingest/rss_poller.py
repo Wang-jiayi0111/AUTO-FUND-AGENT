@@ -19,6 +19,11 @@ _CONTENT_NOENCODE_RE = re.compile(
     r"content_noencode:\s*['\"](.+?)['\"]\s*,\s*content",
     re.DOTALL,
 )
+_HTTP_HEADERS = {
+    "User-Agent": "AUTO-FUND-AGENT/1.0",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+}
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -101,7 +106,7 @@ def _fetch_wewe_json_by_url(feed_url: str) -> dict[str, str]:
         return {}
     try:
         with httpx.Client(timeout=60.0) as client:
-            resp = client.get(json_url)
+            resp = client.get(json_url, headers=_HTTP_HEADERS)
             resp.raise_for_status()
             data = resp.json()
     except (httpx.HTTPError, ValueError):
@@ -122,11 +127,22 @@ def fetch_article_html(url: str, timeout: float = 20.0) -> str:
         return ""
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-            resp = client.get(url, headers={"User-Agent": "AUTO-FUND-AGENT/1.0"})
+            resp = client.get(url, headers=_HTTP_HEADERS)
             resp.raise_for_status()
             return resp.text
     except httpx.HTTPError:
         return ""
+
+
+def _fetch_feed(feed_url: str) -> feedparser.FeedParserDict:
+    """Fetch RSS with no-cache headers; fall back to feedparser's URL handling."""
+    try:
+        with httpx.Client(timeout=60.0, follow_redirects=True) as client:
+            resp = client.get(feed_url, headers=_HTTP_HEADERS)
+            resp.raise_for_status()
+            return feedparser.parse(resp.content)
+    except httpx.HTTPError:
+        return feedparser.parse(feed_url)
 
 
 def enrich_article_images(article: ArticleItem) -> ArticleItem:
@@ -158,7 +174,7 @@ def poll_rss(
     if not blogger.rss_url:
         return []
     seen = set(seen_guids or [])
-    parsed = feedparser.parse(blogger.rss_url)
+    parsed = _fetch_feed(blogger.rss_url)
     wewe_html_by_url = _fetch_wewe_json_by_url(blogger.rss_url)
     articles: list[ArticleItem] = []
     for entry in parsed.entries:
@@ -187,6 +203,10 @@ def poll_rss(
                 image_urls=images,
             )
         )
-        if limit and len(articles) >= limit:
-            break
+    articles.sort(
+        key=lambda item: item.published_at or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    if limit:
+        return articles[:limit]
     return articles
