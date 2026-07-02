@@ -1,8 +1,8 @@
 [Unit]
-Description=Legacy single-step poll + digest timer (prefer poll 14:30 + digest 14:40)
+Description=Legacy single-step poll + digest timer (prefer poll 14:20 + digest 14:30)
 
 [Timer]
-OnCalendar=Mon-Fri *-*-* 14:30:00
+OnCalendar=Mon-Fri *-*-* 14:20:00
 Persistent=true
 
 [Install]

@@ -3,7 +3,8 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from src.config import get_settings
 from src.notify.wecom import WeComNotifier
@@ -13,6 +14,7 @@ from src.utils.log_setup import configure_logging
 from src.utils.trading_calendar import is_trading_day
 
 logger = logging.getLogger(__name__)
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def _field_text(record: dict, key: str) -> str:
@@ -43,8 +45,43 @@ def _is_sector_alert_record(record: dict) -> bool:
     return action == "观望" or status == "风险提示"
 
 
+def _field_number(record: dict, key: str) -> int | float | None:
+    return FeishuStore._field_number(record, key)
+
+
+def _start_of_today_shanghai() -> datetime:
+    now = datetime.now(SHANGHAI_TZ)
+    return now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+
+
+def _source_status(
+    store: FeishuStore,
+    active_blogger_ids: set[str],
+    article_bloggers: set[str],
+    since: datetime,
+) -> tuple[list[str], list[str], list[str]]:
+    since_ms = int(since.timestamp() * 1000)
+    rss_failed: list[str] = []
+    unchecked: list[str] = []
+    not_found: list[str] = []
+
+    for rec in store.list_records("bloggers"):
+        blogger_id = _field_text(rec, "blogger_id")
+        if blogger_id not in active_blogger_ids or blogger_id in article_bloggers:
+            continue
+        last_checked = _field_number(rec, "last_checked_at")
+        last_error = _field_text(rec, "last_error")
+        if not isinstance(last_checked, (int, float)) or last_checked < since_ms:
+            unchecked.append(blogger_id)
+        elif last_error:
+            rss_failed.append(blogger_id)
+        else:
+            not_found.append(blogger_id)
+    return rss_failed, unchecked, not_found
+
+
 def build_digest(store: FeishuStore, since: datetime) -> str:
-    follow_ids = store.get_active_follow_bloggers()
+    active_blogger_ids = store.get_active_blogger_ids()
     focus_items = store.get_active_focus_items()
     name_map = store.get_blogger_name_map()
     operations = store.get_operations_since(since)
@@ -58,7 +95,7 @@ def build_digest(store: FeishuStore, since: datetime) -> str:
 
     for op in operations:
         blogger_id = store.blogger_id_from_field(op, "blogger_id")
-        if follow_ids and blogger_id not in follow_ids:
+        if blogger_id not in active_blogger_ids:
             continue
         if _is_sector_alert_record(op):
             sector_alerts.append(op)
@@ -129,7 +166,7 @@ def build_digest(store: FeishuStore, since: datetime) -> str:
                     f"{fund_name}{code_part} | {_field_text(op, 'amount_or_ratio')}"
                 )
     else:
-        for blogger_id in sorted(follow_ids):
+        for blogger_id in sorted(active_blogger_ids):
             if blogger_id not in bloggers_with_ops:
                 blogger_name = name_map.get(blogger_id, blogger_id)
                 lines.append(f"- {blogger_name} → 无新操作")
@@ -158,10 +195,21 @@ def build_digest(store: FeishuStore, since: datetime) -> str:
         f"- 待确认：{len(pending)} 条",
         f"- 失败：{len(failed)} 篇",
     ])
-    missing = sorted(follow_ids - article_bloggers) if follow_ids else []
-    if missing:
-        names = [name_map.get(blogger_id, blogger_id) for blogger_id in missing]
-        lines.append(f"- 未发现当天文章：{'、'.join(names)}")
+    rss_failed, unchecked, not_found = _source_status(
+        store,
+        active_blogger_ids,
+        article_bloggers,
+        since,
+    )
+    if rss_failed:
+        names = [name_map.get(blogger_id, blogger_id) for blogger_id in sorted(rss_failed)]
+        lines.append(f"- RSS 异常博主：{'、'.join(names)}")
+    if unchecked:
+        names = [name_map.get(blogger_id, blogger_id) for blogger_id in sorted(unchecked)]
+        lines.append(f"- 今日未检查 RSS：{'、'.join(names)}")
+    if not_found:
+        names = [name_map.get(blogger_id, blogger_id) for blogger_id in sorted(not_found)]
+        lines.append(f"- RSS 未发现当天文章（需人工确认是否发文）：{'、'.join(names)}")
     if failed:
         titles = [_field_text(rec, "title") for rec in failed[:3]]
         lines.append(f"- 失败文章：{'；'.join(titles)}")
@@ -194,7 +242,7 @@ def main() -> None:
         return
 
     store = FeishuStore(settings)
-    since = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+    since = _start_of_today_shanghai()
     content = build_digest(store, since)
 
     if args.dry_run:

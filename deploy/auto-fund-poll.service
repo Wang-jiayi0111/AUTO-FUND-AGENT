@@ -6,7 +6,8 @@ After=network-online.target
 Type=oneshot
 WorkingDirectory=/opt/AUTO-FUND-AGENT
 EnvironmentFile=/opt/AUTO-FUND-AGENT/.env
-ExecStart=/opt/AUTO-FUND-AGENT/.venv/bin/python -m src.jobs.poll --limit 5
+ExecStartPre=/opt/AUTO-FUND-AGENT/.venv/bin/python -m src.tools.apply_manual_submissions
+ExecStart=/opt/AUTO-FUND-AGENT/.venv/bin/python -m src.jobs.poll --limit 1 --refresh-rss
 User=auto-fund
 
 [Install]

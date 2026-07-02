@@ -2,11 +2,56 @@
 
 ## Daily Flow
 
-- 14:25: WeWe RSS refreshes subscriptions.
-- 14:30: `python -m src.jobs.poll --limit 5`
-- 14:33: WeWe RSS refreshes subscriptions again.
-- 14:35: `python -m src.jobs.poll --limit 5`
-- 14:40: `python -m src.jobs.digest`
+- 14:15: WeWe RSS refreshes subscriptions.
+- 14:20: `python -m src.jobs.poll --limit 1 --refresh-rss`
+- 14:23: WeWe RSS refreshes subscriptions again.
+- 14:25: `python -m src.jobs.poll --limit 1 --refresh-rss`
+- 14:30: `python -m src.jobs.digest`
+
+## Manual URL fallback
+
+WeWe RSS is only used to discover article URLs. If WeWe misses an article or the
+account login expires, the preferred user-facing path is the optional Feishu
+`ManualSubmissions` table:
+
+1. Add one row in `ManualSubmissions`.
+2. Fill `blogger` with the blogger id, display name, or WeChat name.
+3. Fill `article_url`.
+4. Set `status` to `待处理` or leave it empty.
+5. Wait for the next scheduled `run_poll.bat`; it runs `apply_manual_submissions`
+   before RSS polling.
+
+If the URL cannot be fetched by the script, paste the article body into
+`article_text` and set `status` back to `待处理`.
+
+CLI fallback remains available:
+
+```powershell
+python -m src.tools.submit_article --blogger lanjing --url "https://mp.weixin.qq.com/s/xxx"
+```
+
+Useful options:
+
+```powershell
+python -m src.tools.submit_article --blogger lanjing --url "https://mp.weixin.qq.com/s/xxx" --dry-run
+python -m src.tools.submit_article --blogger lanjing --url "https://mp.weixin.qq.com/s/xxx" --title "7.2 调仓"
+python -m src.tools.submit_article --blogger lanjing --url "https://mp.weixin.qq.com/s/xxx" --force
+python -m src.tools.apply_manual_submissions --dry-run
+python -m src.tools.apply_manual_submissions
+```
+
+This path bypasses RSS scanning, but still uses the same Articles, Operations,
+PendingReview, and operation-level dedupe logic.
+
+If both WeWe RSS and direct WeChat page fetching fail, copy the article body to a
+UTF-8 text file and submit it manually:
+
+```powershell
+python -m src.tools.submit_text --blogger lanjing --url "https://mp.weixin.qq.com/s/xxx" --title "7.2 调仓" --file article.txt
+```
+
+Use `--dry-run` first if you want to inspect the parsed operations before writing
+to Feishu.
 
 `Articles` is the idempotency table. Re-running `poll` must not duplicate an article that already has a final status.
 

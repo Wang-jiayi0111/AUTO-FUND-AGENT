@@ -1,4 +1,4 @@
-# Weekdays: poll RSS at 14:30 and 14:35, then send digest at 14:40
-30 14 * * 1-5 cd /opt/AUTO-FUND-AGENT && /opt/AUTO-FUND-AGENT/.venv/bin/python -m src.jobs.poll --limit 5 >> /var/log/auto-fund-poll.log 2>&1
-35 14 * * 1-5 cd /opt/AUTO-FUND-AGENT && /opt/AUTO-FUND-AGENT/.venv/bin/python -m src.jobs.poll --limit 5 >> /var/log/auto-fund-poll.log 2>&1
-40 14 * * 1-5 cd /opt/AUTO-FUND-AGENT && /opt/AUTO-FUND-AGENT/.venv/bin/python -m src.jobs.digest >> /var/log/auto-fund-digest.log 2>&1
+# Weekdays: poll RSS at 14:20 and 14:25, then send digest at 14:30
+20 14 * * 1-5 cd /opt/AUTO-FUND-AGENT && /opt/AUTO-FUND-AGENT/.venv/bin/python -m src.tools.apply_manual_submissions && /opt/AUTO-FUND-AGENT/.venv/bin/python -m src.jobs.poll --limit 1 --refresh-rss >> /var/log/auto-fund-poll.log 2>&1
+25 14 * * 1-5 cd /opt/AUTO-FUND-AGENT && /opt/AUTO-FUND-AGENT/.venv/bin/python -m src.tools.apply_manual_submissions && /opt/AUTO-FUND-AGENT/.venv/bin/python -m src.jobs.poll --limit 1 --refresh-rss >> /var/log/auto-fund-poll.log 2>&1
+30 14 * * 1-5 cd /opt/AUTO-FUND-AGENT && /opt/AUTO-FUND-AGENT/.venv/bin/python -m src.jobs.digest >> /var/log/auto-fund-digest.log 2>&1

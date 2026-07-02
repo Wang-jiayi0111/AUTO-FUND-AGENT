@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -10,7 +11,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from src.config import get_settings
-from src.ingest.rss_poller import poll_rss
+from src.ingest.rss_poller import poll_rss, refresh_wewe_feed
 from src.notify.messages import format_sector_risk_markdown
 from src.notify.wecom import WeComNotifier
 from src.parse.pipeline import ParsePipeline
@@ -66,9 +67,25 @@ def process_blogger(
     today_only: bool = True,
     force_urls: set[str] | None = None,
     only_urls: set[str] | None = None,
+    force_all: bool = False,
+    refresh_rss: bool = False,
+    refresh_wait_seconds: float = 0.0,
 ) -> int:
     known = seen.seen_for_blogger(blogger.id) if not store else set()
-    articles = poll_rss(blogger, known, limit=limit)
+    try:
+        if refresh_rss:
+            refresh_wewe_feed(blogger.rss_url)
+            if refresh_wait_seconds > 0:
+                time.sleep(refresh_wait_seconds)
+        articles = poll_rss(blogger, known, limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("RSS poll failed for %s: %s", blogger.id, exc)
+        if store:
+            try:
+                store.update_blogger_health(blogger.id, success=False, error=str(exc))
+            except Exception as health_exc:  # noqa: BLE001
+                logger.warning("Failed to update blogger health for %s: %s", blogger.id, health_exc)
+        return 0
     stats = PollStats(found=len(articles))
 
     if store:
@@ -84,7 +101,7 @@ def process_blogger(
     for article in articles:
         if only_urls is not None and article.url not in only_urls:
             continue
-        force = article.url in (force_urls or set())
+        force = force_all or article.url in (force_urls or set())
         if today_only and not force and not _is_today_article(article):
             logger.info("Skip non-today article: %s | %s", blogger.name, article.title)
             stats.skipped += 1
@@ -94,7 +111,12 @@ def process_blogger(
         if store:
             existing = store.find_article(article.guid, article.url)
             if not force and _article_should_skip(existing):
-                logger.info("Skip existing article: %s | %s", blogger.name, article.title)
+                logger.info(
+                    "Skip existing article: %s | %s | status=%s",
+                    blogger.name,
+                    article.title,
+                    FeishuStore._field_text(existing or {}, "status"),
+                )
                 stats.skipped += 1
                 continue
             if existing:
@@ -240,6 +262,18 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None, help="Max new articles per blogger")
     parser.add_argument("--blogger", type=str, default=None, help="Only process one blogger_id")
     parser.add_argument("--include-old", action="store_true", help="Process non-today articles")
+    parser.add_argument("--force", action="store_true", help="Reparse existing Articles rows")
+    parser.add_argument(
+        "--refresh-rss",
+        action="store_true",
+        help="Request WeWe RSS refresh with ?update=true before reading each feed",
+    )
+    parser.add_argument(
+        "--refresh-wait-seconds",
+        type=float,
+        default=0.0,
+        help="Seconds to wait after each WeWe RSS refresh request",
+    )
     parser.add_argument(
         "--log-file",
         type=str,
@@ -258,10 +292,16 @@ def main() -> None:
     store = None
     if not args.dry_run and settings.feishu_app_id and settings.feishu_app_token:
         store = FeishuStore(settings)
+    active_blogger_ids = store.get_active_blogger_ids() if store else {b.id for b in settings.bloggers}
+    if store and not active_blogger_ids:
+        logger.warning("No active Bloggers found by status; skip all bloggers")
 
     total = 0
     for blogger in settings.bloggers:
         if args.blogger and blogger.id != args.blogger:
+            continue
+        if blogger.id not in active_blogger_ids:
+            logger.info("Skip disabled blogger %s", blogger.id)
             continue
         if not blogger.rss_url:
             logger.warning("Missing RSS URL for blogger %s", blogger.id)
@@ -275,6 +315,9 @@ def main() -> None:
             args.dry_run,
             limit=args.limit,
             today_only=not args.include_old,
+            force_all=args.force,
+            refresh_rss=args.refresh_rss,
+            refresh_wait_seconds=args.refresh_wait_seconds,
         )
 
     logger.info("Processed %s new article(s)", total)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from datetime import datetime, timezone
@@ -13,6 +14,7 @@ from src.models import ArticleItem, ParsedOperation
 from src.utils.fund_name import normalize_fund_name
 
 FEISHU_API = "https://open.feishu.cn/open-apis"
+logger = logging.getLogger(__name__)
 
 ARTICLE_STATUS_PENDING = "待解析"
 ARTICLE_STATUS_PARSING = "解析中"
@@ -37,6 +39,7 @@ class FeishuStore:
         self._token_expires = 0.0
         self._blogger_record_by_text: dict[str, str] = {}
         self._blogger_text_by_record: dict[str, str] = {}
+        self._blogger_status_by_text: dict[str, str] = {}
         self._blogger_maps_loaded = False
 
     def _headers(self) -> dict[str, str]:
@@ -119,6 +122,19 @@ class FeishuStore:
         if data.get("code") != 0:
             raise RuntimeError(f"Feishu update failed: {data}")
 
+    def delete_record(self, table: str, record_id: str) -> None:
+        table_id = self._table_id(table)
+        url = (
+            f"{FEISHU_API}/bitable/v1/apps/{self.settings.feishu_app_token}"
+            f"/tables/{table_id}/records/{record_id}"
+        )
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.delete(url, headers=self._headers())
+            resp.raise_for_status()
+            data = resp.json()
+        if data.get("code") != 0:
+            raise RuntimeError(f"Feishu delete failed: {data}")
+
     @staticmethod
     def _field_text(record: dict[str, Any], key: str) -> str:
         val = record.get("fields", {}).get(key)
@@ -173,6 +189,7 @@ class FeishuStore:
             if text_id:
                 self._blogger_record_by_text[text_id] = rec["record_id"]
                 self._blogger_text_by_record[rec["record_id"]] = text_id
+                self._blogger_status_by_text[text_id] = self._field_text(rec, "status")
         self._blogger_maps_loaded = True
 
     def _blogger_link(self, blogger_id: str) -> list[str]:
@@ -209,6 +226,67 @@ class FeishuStore:
             dt = dt.replace(tzinfo=timezone.utc)
         return int(dt.timestamp() * 1000)
 
+    @staticmethod
+    def _norm_key(value: str | None) -> str:
+        return (value or "").strip().lower()
+
+    def _same_article_record(
+        self,
+        record: dict[str, Any],
+        article: ArticleItem,
+        article_record_id: str | None = None,
+    ) -> bool:
+        if article_record_id and article_record_id in self._link_record_ids(record, "article_id"):
+            return True
+        rec_guid = self._field_text(record, "article_guid")
+        if article.guid and rec_guid and article.guid == rec_guid:
+            return True
+        rec_url = self._field_url(record, "article_url")
+        return bool(article.url and rec_url and article.url == rec_url)
+
+    def _same_operation_record(
+        self,
+        record: dict[str, Any],
+        op: ParsedOperation,
+    ) -> bool:
+        if self._field_text(record, "action") != op.action:
+            return False
+
+        rec_code = self._field_text(record, "fund_code")
+        if rec_code or op.fund_code:
+            if rec_code != op.fund_code:
+                return False
+        else:
+            rec_name = normalize_fund_name(self._field_text(record, "fund_name"))
+            op_name = normalize_fund_name(op.fund_name or op.fund_name_raw)
+            rec_sector = self._norm_key(self._field_text(record, "sector"))
+            op_sector = self._norm_key(op.sector)
+            if rec_name or op_name:
+                if rec_name != op_name:
+                    return False
+            elif rec_sector != op_sector:
+                return False
+
+        rec_amount = self._norm_key(self._field_text(record, "amount_or_ratio"))
+        op_amount = self._norm_key(op.amount_or_ratio)
+        if rec_amount and op_amount and rec_amount != op_amount:
+            return False
+
+        return True
+
+    def find_existing_operation(
+        self,
+        article: ArticleItem,
+        op: ParsedOperation,
+        article_record_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        for rec in self.list_records("operations"):
+            if not self._same_article_record(rec, article, article_record_id):
+                continue
+            if self._same_operation_record(rec, op):
+                return rec
+        return None
+
     def save_operation(
         self,
         article: ArticleItem,
@@ -217,6 +295,17 @@ class FeishuStore:
         article_record_id: str | None = None,
         source: str | None = None,
     ) -> str:
+        existing = self.find_existing_operation(article, op, article_record_id)
+        if existing:
+            logger.info(
+                "Skip duplicate operation: %s | %s | %s | %s",
+                article.blogger_id,
+                article.title,
+                op.action,
+                op.fund_code or op.fund_name or op.fund_name_raw or op.sector,
+            )
+            return existing["record_id"]
+
         op_id = str(uuid.uuid4())
         fields = {
             "op_id": op_id,
@@ -249,6 +338,16 @@ class FeishuStore:
         op: ParsedOperation,
         article_record_id: str | None = None,
     ) -> str:
+        existing = self.find_existing_operation(article, op, article_record_id)
+        if existing:
+            logger.info(
+                "Skip duplicate sector alert: %s | %s | %s",
+                article.blogger_id,
+                article.title,
+                op.sector or op.fund_name,
+            )
+            return existing["record_id"]
+
         op_id = str(uuid.uuid4())
         fields = {
             "op_id": op_id,
@@ -466,15 +565,13 @@ class FeishuStore:
             fields["mapping_id"] = str(uuid.uuid4())
             self.create_record("fund_mapping", fields)
 
-    def get_active_follow_bloggers(self) -> set[str]:
+    def get_active_blogger_ids(self) -> set[str]:
         ids: set[str] = set()
-        for rec in self.list_records("follow_list"):
-            active = rec.get("fields", {}).get("active")
-            if active is False:
+        self._load_blogger_maps()
+        for blogger_id, status in self._blogger_status_by_text.items():
+            if status.strip() == "停用":
                 continue
-            blogger = self.blogger_id_from_field(rec, "blogger_id")
-            if blogger:
-                ids.add(blogger)
+            ids.add(blogger_id)
         return ids
 
     def get_active_focus_items(self) -> list[dict[str, str]]:

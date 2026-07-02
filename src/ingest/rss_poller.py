@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import re
+import logging
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Iterable
-from urllib.parse import urljoin
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import feedparser
 import httpx
@@ -12,6 +13,8 @@ from bs4 import BeautifulSoup
 
 from src.config import BloggerConfig
 from src.models import ArticleItem
+
+logger = logging.getLogger(__name__)
 
 _IMG_RE = re.compile(r"https?://[^\s\"']+\.(?:jpg|jpeg|png|gif|webp)", re.I)
 _WEWE_MIN_CONTENT_CHARS = 80
@@ -24,6 +27,31 @@ _HTTP_HEADERS = {
     "Cache-Control": "no-cache",
     "Pragma": "no-cache",
 }
+
+
+def _localhost_fallback_url(url: str) -> str | None:
+    if "://localhost:" in url:
+        return url.replace("://localhost:", "://127.0.0.1:", 1)
+    return None
+
+
+def _url_with_query_param(url: str, key: str, value: str) -> str:
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query[key] = value
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
+def _get_with_localhost_fallback(
+    client: httpx.Client,
+    url: str,
+    **kwargs,
+) -> httpx.Response:
+    resp = client.get(url, **kwargs)
+    fallback = _localhost_fallback_url(url)
+    if fallback and resp.status_code >= 500:
+        resp = client.get(fallback, **kwargs)
+    return resp
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -61,6 +89,39 @@ def _html_to_text(html: str) -> str:
     for tag in soup(["script", "style"]):
         tag.decompose()
     return soup.get_text("\n", strip=True)
+
+
+def _html_title(html: str) -> str:
+    if not html:
+        return ""
+    soup = BeautifulSoup(html, "lxml")
+    for selector in (
+        ("meta", {"property": "og:title"}),
+        ("meta", {"name": "twitter:title"}),
+    ):
+        tag = soup.find(*selector)
+        if tag and tag.get("content"):
+            return str(tag.get("content", "")).strip()
+    h1 = soup.find("h1")
+    if h1:
+        return h1.get_text(" ", strip=True)
+    if soup.title:
+        return soup.title.get_text(" ", strip=True)
+    return ""
+
+
+def looks_like_unavailable_wechat_page(html: str, url: str = "") -> bool:
+    if "mp.weixin.qq.com" not in url and "mp.weixin.qq.com" not in html:
+        return False
+    markers = (
+        "wappoc_appmsgcaptcha",
+        "appmsgcaptcha",
+        "环境异常",
+        "验证码",
+        "请在微信客户端打开",
+        "当前环境异常",
+    )
+    return any(marker in html for marker in markers)
 
 
 def _to_json_feed_url(feed_url: str) -> str | None:
@@ -106,7 +167,7 @@ def _fetch_wewe_json_by_url(feed_url: str) -> dict[str, str]:
         return {}
     try:
         with httpx.Client(timeout=60.0) as client:
-            resp = client.get(json_url, headers=_HTTP_HEADERS)
+            resp = _get_with_localhost_fallback(client, json_url, headers=_HTTP_HEADERS)
             resp.raise_for_status()
             data = resp.json()
     except (httpx.HTTPError, ValueError):
@@ -127,22 +188,61 @@ def fetch_article_html(url: str, timeout: float = 20.0) -> str:
         return ""
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-            resp = client.get(url, headers=_HTTP_HEADERS)
+            resp = _get_with_localhost_fallback(client, url, headers=_HTTP_HEADERS)
             resp.raise_for_status()
             return resp.text
     except httpx.HTTPError:
         return ""
 
 
+def article_from_url(
+    blogger: BloggerConfig,
+    url: str,
+    title: str = "",
+    published_at: datetime | None = None,
+) -> ArticleItem:
+    html = fetch_article_html(url, timeout=60.0)
+    body = _extract_wewe_article_html(html)
+    text = _html_to_text(body)
+    images = _extract_images(body, url)
+    return ArticleItem(
+        blogger_id=blogger.id,
+        blogger_name=blogger.name,
+        title=title or _html_title(html) or url,
+        url=url,
+        guid=url,
+        published_at=published_at or datetime.now(tz=timezone.utc),
+        content_html=body,
+        content_text=text,
+        image_urls=images,
+    )
+
+
 def _fetch_feed(feed_url: str) -> feedparser.FeedParserDict:
     """Fetch RSS with no-cache headers; fall back to feedparser's URL handling."""
     try:
         with httpx.Client(timeout=60.0, follow_redirects=True) as client:
-            resp = client.get(feed_url, headers=_HTTP_HEADERS)
+            resp = _get_with_localhost_fallback(client, feed_url, headers=_HTTP_HEADERS)
             resp.raise_for_status()
             return feedparser.parse(resp.content)
     except httpx.HTTPError:
         return feedparser.parse(feed_url)
+
+
+def refresh_wewe_feed(feed_url: str) -> bool:
+    """Ask WeWe RSS to refresh this feed before polling it."""
+    if not feed_url:
+        return False
+    refresh_url = _url_with_query_param(feed_url, "update", "true")
+    try:
+        with httpx.Client(timeout=90.0, follow_redirects=True) as client:
+            resp = _get_with_localhost_fallback(client, refresh_url, headers=_HTTP_HEADERS)
+            resp.raise_for_status()
+        logger.info("WeWe RSS refresh requested: %s", refresh_url)
+        return True
+    except httpx.HTTPError as exc:
+        logger.warning("WeWe RSS refresh failed: %s | %s", refresh_url, exc)
+        return False
 
 
 def enrich_article_images(article: ArticleItem) -> ArticleItem:

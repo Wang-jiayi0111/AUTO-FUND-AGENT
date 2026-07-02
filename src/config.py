@@ -86,10 +86,10 @@ def _load_bloggers() -> list[BloggerConfig]:
 def get_settings() -> Settings:
     tables = {
         "bloggers": os.getenv("FEISHU_TABLE_BLOGGERS", ""),
-        "follow_list": os.getenv("FEISHU_TABLE_FOLLOW_LIST", ""),
         "focus_list": os.getenv("FEISHU_TABLE_FOCUS_LIST", ""),
         "operations": os.getenv("FEISHU_TABLE_OPERATIONS", ""),
         "articles": os.getenv("FEISHU_TABLE_ARTICLES", ""),
+        "manual_submissions": os.getenv("FEISHU_TABLE_MANUAL_SUBMISSIONS", ""),
         "fund_mapping": os.getenv("FEISHU_TABLE_FUND_MAPPING", ""),
         "pending_review": os.getenv("FEISHU_TABLE_PENDING_REVIEW", ""),
     }

@@ -1,9 +1,9 @@
 [Unit]
-Description=Poll fund blogger RSS at 14:30 and 14:35 on weekdays
+Description=Poll fund blogger RSS at 14:20 and 14:25 on weekdays
 
 [Timer]
-OnCalendar=Mon-Fri *-*-* 14:30:00
-OnCalendar=Mon-Fri *-*-* 14:35:00
+OnCalendar=Mon-Fri *-*-* 14:20:00
+OnCalendar=Mon-Fri *-*-* 14:25:00
 Persistent=true
 
 [Install]

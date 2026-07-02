@@ -21,8 +21,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now auto-fund-poll.timer auto-fund-digest.timer
 ```
 
-Runs **weekdays 14:30 and 14:35**: poll latest RSS articles.  
-Runs **weekdays 14:40**: send digest push (trading-day check inside digest).
+Runs **weekdays 14:20 and 14:25**: poll latest RSS articles.  
+Runs **weekdays 14:30**: send digest push (trading-day check inside digest).
 
 Verify:
 
@@ -36,7 +36,7 @@ sudo -u auto-fund bash -c 'cd /opt/AUTO-FUND-AGENT && .venv/bin/python -m src.jo
 
 ```bash
 crontab -e
-# paste contents of deploy/crontab.example (weekday 14:30/14:35 poll + 14:40 digest)
+# paste contents of deploy/crontab.example (weekday 14:20/14:25 poll + 14:30 digest)
 ```
 
 ## Logs
@@ -46,7 +46,7 @@ journalctl -u auto-fund-poll.service -f
 journalctl -u auto-fund-digest.service -f
 ```
 
-`auto-fund-daily.timer` remains in `deploy/` for the older single-task workflow, but the recommended setup is the separated 14:30/14:35 poll + 14:40 digest timers.
+`auto-fund-daily.timer` remains in `deploy/` for the older single-task workflow, but the recommended setup is the separated 14:20/14:25 poll + 14:30 digest timers.
 
 ## Secrets
 

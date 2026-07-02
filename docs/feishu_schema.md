@@ -1,6 +1,7 @@
 # Feishu Bitable Schema
 
-Create one Bitable app with 7 data tables.
+Create one Bitable app with 6 required data tables. `ManualSubmissions` is optional
+but recommended as the user-facing fallback when WeWe RSS misses an article.
 
 ## Bloggers
 
@@ -10,7 +11,7 @@ Create one Bitable app with 7 data tables.
 | name | Text | Display name |
 | wechat_name | Text | WeChat account name |
 | rss_url | URL | WeWe RSS 订阅链接（`/feeds/MP_WXS_xxx.rss`） |
-| status | Single select | 启用 / 停用 |
+| status | Single select | 启用 / 停用；停用后跳过 poll 和 digest |
 | last_checked_at | DateTime | RSS health check time |
 | last_success_at | DateTime | Last successful RSS check |
 | last_article_title | Text | Latest RSS article title |
@@ -18,14 +19,6 @@ Create one Bitable app with 7 data tables.
 | last_published_at | DateTime | Latest RSS article publish time |
 | last_error | Long text | Latest RSS error |
 | consecutive_failures | Number | RSS failure count |
-
-## FollowList
-
-| Field | Type | Notes |
-|-------|------|-------|
-| blogger_id | Link → Bloggers | |
-| note | Text | Optional |
-| active | Checkbox | Default true |
 
 ## FocusList
 
@@ -115,3 +108,23 @@ Create one Bitable app with 7 data tables.
 | processed_at | DateTime | |
 | operation_id | Link → Operations | |
 | status | Single select | 待确认/已通过/已拒绝/已处理 |
+
+## ManualSubmissions Optional
+
+This table is the user-facing fallback input. When WeWe RSS fails or misses an
+article, add one row here. The next scheduled `run_poll.bat` will process it
+before RSS polling.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| submission_id | Text (primary) | Optional UUID/manual id |
+| blogger | Text | Required. Accepts `blogger_id`, display name, or WeChat name |
+| article_url | URL | Required. WeChat article URL |
+| title | Text | Optional if URL can be fetched; recommended |
+| published_at | DateTime | Optional |
+| article_text | Long text | Optional fallback when direct URL fetching is blocked |
+| status | Single select | 待处理/处理中/已处理/处理失败 |
+| last_error | Long text | Processing error |
+| article_id | Link → Articles | Filled after processing |
+| processed_at | DateTime | Filled after processing |
+| created_at | DateTime | Optional |

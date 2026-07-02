@@ -6,7 +6,12 @@ if not exist logs mkdir logs
 call .venv\Scripts\activate.bat
 set LOG=logs\daily.log
 python -c "from src.utils.log_setup import log_job_banner; log_job_banner('start', r'%LOG%')"
-python -m src.jobs.poll --limit 5 --log-file %LOG%
+python -m src.tools.apply_manual_submissions --log-file %LOG%
+if errorlevel 1 (
+    python -c "from src.utils.log_setup import append_log_line; append_log_line('manual submissions failed, skip poll/digest', r'%LOG%')"
+    exit /b 1
+)
+python -m src.jobs.poll --limit 1 --refresh-rss --log-file %LOG%
 if errorlevel 1 (
     python -c "from src.utils.log_setup import append_log_line; append_log_line('poll failed, skip digest', r'%LOG%')"
     exit /b 1

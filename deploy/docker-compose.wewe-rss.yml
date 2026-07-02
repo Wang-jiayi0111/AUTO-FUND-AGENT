@@ -13,8 +13,8 @@ services:
       - SERVER_ORIGIN_URL=http://localhost:4000
       # 推荐开启全文，便于 LLM 解析正文
       - FEED_MODE=fulltext
-      # 工作日 14:25 和 14:33 刷新，让 14:30/14:35 的 poll 拿到最新 RSS
-      - CRON_EXPRESSION=25,33 14 * * 1-5
+      # 工作日 14:15 和 14:23 刷新，让 14:20/14:25 的 poll 拿到最新 RSS
+      - CRON_EXPRESSION=15,23 14 * * 1-5
       - MAX_REQUEST_PER_MINUTE=60
     volumes:
       - wewe-rss-data:/app/data
